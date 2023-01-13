@@ -1679,6 +1679,10 @@ if(NOT INTERN_BUILD_MOBILE)
     # we want to respect the standard, and we are bored of those **** .
     add_definitions(-D_CRT_SECURE_NO_DEPRECATE=1)
     string(APPEND CMAKE_CUDA_FLAGS " -Xcompiler=/wd4819,/wd4503,/wd4190,/wd4244,/wd4251,/wd4275,/wd4522")
+    # Want to be able to capture constexpr in lambdas and this flag.
+    # The /Zc:lambda compiler option enables the conforming lambda processor in MSVC.
+    # Note that this will be turned on by defualt for std=c++20 and above
+    string(APPEND CMAKE_CUDA_FLAGS " /Zc:lambda")
   endif()
 
   string(APPEND CMAKE_CUDA_FLAGS " -Wno-deprecated-gpu-targets --expt-extended-lambda")
