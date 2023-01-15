@@ -1682,7 +1682,7 @@ if(NOT INTERN_BUILD_MOBILE)
     # Want to be able to capture constexpr in lambdas and this flag.
     # The /Zc:lambda compiler option enables the conforming lambda processor in MSVC.
     # Note that this will be turned on by defualt for std=c++20 and above
-    string(APPEND CMAKE_CUDA_FLAGS ",/Zc:lambda")
+    string(APPEND CMAKE_CUDA_FLAGS " -Xcompiler /Zc:lambda")
   endif()
 
   string(APPEND CMAKE_CUDA_FLAGS " -Wno-deprecated-gpu-targets --expt-extended-lambda")
