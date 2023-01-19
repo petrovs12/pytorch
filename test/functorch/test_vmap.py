@@ -618,7 +618,7 @@ class TestVmapAPI(TestCase):
         x = torch.randn(11)
         y = torch.randn(11)
         with warnings.catch_warnings(record=True) as wa:
-            vmap(op)(x, y)
+            torch.vmap(op)(x, y)
             # The single warning here is the "vmap is experimental"
             # warning, not a warning from the vmap fallback path.
             self.assertEqual(len(wa), 1)
@@ -633,7 +633,7 @@ class TestVmapAPI(TestCase):
         y = torch.randn(11)
         with warnings.catch_warnings(record=True) as wa:
             with EnableVmapFallbackWarnings():
-                vmap(op)(x, y)
+                torch.vmap(op)(x, y)
             self.assertEqual(len(wa), 2)
             self.assertRegex(str(wa[-1].message), FALLBACK_REGEX)
 
@@ -3683,7 +3683,6 @@ class TestVmapOperatorsOpInfo(TestCase):
         xfail('jiterator_binary', device_type='cuda'),
         xfail('special.modified_bessel_i0'),
         xfail('jiterator_4inputs_with_extra_args', device_type='cuda'),
-        xfail('linalg.vander', ''),
         xfail('segment_reduce', 'lengths'),
         xfail('lu_solve', ''),
         xfail('special.bessel_y1'),
@@ -4147,8 +4146,8 @@ class TestVmapOperatorsOpInfo(TestCase):
         xfail('linalg.vector_norm'),  # can accept vector inputs
         xfail('linalg.norm'),  # can accept vector inputs
         xfail('linalg.norm', 'subgradients_at_zero'),  # can accept vector inputs
+        xfail('linalg.vander'),  # can accept vector inputs
         skip('linalg.multi_dot'),  # accepts list of tensor inputs, has its own special test
-        xfail('linalg.vander'),
         xfail('linalg.vecdot'),
         # throws in vmap on CUDA
         # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got -2)
