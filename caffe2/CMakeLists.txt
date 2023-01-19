@@ -1962,8 +1962,9 @@ if(BUILD_PYTHON)
       install(FILES $<TARGET_PDB_FILE:caffe2_pybind11_state_gpu> DESTINATION "${PYTHON_LIB_REL_PATH}/caffe2/python" OPTIONAL)
     endif()
     set_target_properties(caffe2_pybind11_state_gpu PROPERTIES INSTALL_RPATH "${caffe2_pybind11_rpath}")
+  endif()
 
-    if(MSVC and USE_FLASH_ATTENTION)
+  if(MSVC and USE_FLASH_ATTENTION)
       # This is used to enable the conforming lambda processor in MSVC
       # Which allows us to capture constexpr in lambdas
       # Note that this will be turned on by defualt for std=c++20 and above
@@ -1973,10 +1974,10 @@ if(BUILD_PYTHON)
         # We iterate over thesse files, updating paths and adding the compile flag
         FILE(RELATIVE_PATH tmp_path "${PROJECT_SOURCE_DIR}" "${tmp}")
         SET(tmp_path "../${tmp_path}")
+        MESSAGE(WARNING "Adding compile flag to ${tmp_path}")
         set_source_files_properties(${tmp_path} PROPERTIES COMPILE_FLAGS "-Xcompiler /Zc:lambda")
       endforeach()
     endif()
-  endif()
 
   if(USE_ROCM)
     add_library(caffe2_pybind11_state_hip MODULE ${Caffe2_HIP_PYTHON_SRCS})
