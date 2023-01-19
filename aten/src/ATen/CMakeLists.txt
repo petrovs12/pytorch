@@ -172,16 +172,7 @@ if(USE_FLASH_ATTENTION)
   list(APPEND native_transformers_cuda_cu ${mem_eff_attention_cuda_cu})
   list(APPEND native_transformers_cuda_cu ${mem_eff_attention_cuda_kernels_cu})
   list(APPEND native_transformers_cuda_cpp ${mem_eff_attention_cuda_cpp})
-
-  # This is used to enable the conforming lambda processor in MSVC
-  # Which allows us to capture constexpr in lambdas
-  # Note that this will be turned on by defualt for std=c++20 and above
-  # This should be applied globally when https://github.com/pytorch/pytorch/issues/92600 is fixed
-  if(MSVC)
-    # This is needed to build fused attention kernels on Windows
-    set_source_files_properties(${mem_eff_attention_cuda_cu} PROPERTIES COMPILE_FLAGS "-Xcompiler /Zc:lambda")
-    set_source_files_properties(${mem_eff_attention_cuda_kernels_cu} PROPERTIES COMPILE_FLAGS "-Xcompiler /Zc:lambda")
-  endif()
+  list(APPEND MEM_EFF_ATTENTION_CUDA_SOURCES ${mem_eff_attention_cuda_cu} ${mem_eff_attention_cuda_kernels_cu})
 endif()
 
 # XNNPACK
@@ -631,3 +622,4 @@ set(ATen_VULKAN_INCLUDE ${ATen_VULKAN_INCLUDE} PARENT_SCOPE)
 set(ATen_CPU_DEPENDENCY_LIBS ${ATen_CPU_DEPENDENCY_LIBS} PARENT_SCOPE)
 set(ATen_CUDA_DEPENDENCY_LIBS ${ATen_CUDA_DEPENDENCY_LIBS} PARENT_SCOPE)
 set(ATen_HIP_DEPENDENCY_LIBS ${ATen_HIP_DEPENDENCY_LIBS} PARENT_SCOPE)
+set(MEM_EFF_ATTENTION_CUDA_SOURCES ${MEM_EFF_ATTENTION_CUDA_SOURCES} PARENT_SCOPE)
