@@ -172,6 +172,16 @@ if(USE_FLASH_ATTENTION)
   list(APPEND native_transformers_cuda_cu ${mem_eff_attention_cuda_cu})
   list(APPEND native_transformers_cuda_cu ${mem_eff_attention_cuda_kernels_cu})
   list(APPEND native_transformers_cuda_cpp ${mem_eff_attention_cuda_cpp})
+
+  # This is used to enable the conforming lambda processor in MSVC
+  # Which allows us to capture constexpr in lambdas
+  # Note that this will be turned on by defualt for std=c++20 and above
+  # This should be applied globally when https://github.com/pytorch/pytorch/issues/92600 is fixed
+  if(MSVC)
+    # This is needed to build fused attention kernels on Windows
+    set_source_files_properties(${mem_eff_attention_cuda_cu} PROPERTIES COMPILE_FLAGS "-Xcompiler /Zc:lambda")
+    set_source_files_properties(${mem_eff_attention_cuda_kernels_cu} PROPERTIES COMPILE_FLAGS "-Xcompiler /Zc:lambda")
+  endif()
 endif()
 
 # XNNPACK
