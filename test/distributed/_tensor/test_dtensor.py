@@ -13,20 +13,6 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
 
 
 class DTensorTest(DTensorTestBase):
-    # @with_comms
-    # def test_tensor_constructor(self):
-    #     import torch.distributed._tensor as dist_tensor
-    #     shard_spec = PlacementSpec(device_mesh, strategies=[Shard(0)])
-    #     empty_tensor = dist_tensor.empty((12, 10), placement_spec=shard_spec)
-    #     zero_tensor = dist_tensor.zeros((12, 10), placement_spec=shard_spec)
-    #     one_tensor = dist_tensor.ones((12, 10), placement_spec=shard_spec)
-
-    #     zero_cuda_tensor = dist_tensor.zeros((12, 10), device="cuda", placement_spec=shard_spec)
-
-    #     dist_tensor.empty_like(empty_tensor)
-    #     dist_tensor.zero_like(empty_tensor)
-    #     dist_tensor.one_like(empty_tensor)
-
     @with_comms
     def test_dtensor_constructor(self):
         device_mesh = DeviceMesh(self.device_type, list(range(self.world_size)))
@@ -54,6 +40,21 @@ class DTensorTest(DTensorTestBase):
                 size=dist_tensor_shape,
                 requires_grad=True,
             )
+
+    @with_comms
+    def test_meta_dtensor(self):
+        device_mesh = DeviceMesh(self.device_type, list(range(self.world_size)))
+        dist_specs = [[Shard(0)], [Replicate()]]
+        meta_tensor = torch.randn(1024, 2048, device="meta")
+        for dist_spec in dist_specs:
+            # Test distribute_tensor on meta tensor
+            meta_dtensor = distribute_tensor(meta_tensor, device_mesh, dist_spec)
+            torch.nn.init.constant_(meta_dtensor, 1.2)
+            self.assertEqual(meta_dtensor.device.type, self.device_type)
+            # Test from_local on meta tensor
+            meta_dtensor = DTensor.from_local(meta_tensor, device_mesh, dist_spec)
+            torch.nn.init.constant_(meta_dtensor, 1.5)
+            self.assertEqual(meta_dtensor.device.type, self.device_type)
 
     @with_comms
     def test_dtensor_stride(self):
