@@ -572,9 +572,8 @@ class TestOperators(TestCase):
         # expects last dim to have stride=1
         xfail('view_as_complex'),
         # RuntimeError: query: last dimension must be contiguous
-        # NOTE: This passes on Windows!
-        decorate('nn.functional._scaled_dot_product_attention',
-                 decorator=unittest.skipIf(not IS_WINDOWS, "expects contiguous inputs")),
+        # The fused attention kernels require the last dim to be contiguous
+        xfail('nn.functional._scaled_dot_product_attention', device_type="cuda"),
         # BUG
         # AssertionError: Tensor-likes are not close!
         xfail('as_strided'),
