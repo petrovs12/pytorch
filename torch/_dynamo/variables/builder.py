@@ -752,12 +752,13 @@ def _dataclasses_fields_lambda(obj):
     return TupleVariable(items).add_options(obj)
 
 
-def wrap_fx_proxy(tx, proxy, example_value=None, **options):
+def wrap_fx_proxy(tx, proxy, example_value=None, source=None, **options):
     return wrap_fx_proxy_cls(
         target_cls=TensorVariable,
         tx=tx,
         proxy=proxy,
         example_value=example_value,
+        source=source,
         **options,
     )
 
@@ -765,7 +766,13 @@ def wrap_fx_proxy(tx, proxy, example_value=None, **options):
 # Note: Unfortunate split due to some gross classes existing that subclass TensorVariable
 # Should be compositional instead
 def wrap_fx_proxy_cls(
-    target_cls, tx, proxy, example_value=None, ignore_subclass=False, **options
+    target_cls,
+    tx,
+    proxy,
+    example_value=None,
+    ignore_subclass=False,
+    source=None,
+    **options,
 ):
     from ..symbolic_convert import InstructionTranslatorBase
 
@@ -811,10 +818,9 @@ def wrap_fx_proxy_cls(
                 "ignore_subclass": ignore_subclass,
                 "is_tensor": target_cls is TensorVariable,
             }
-            assert "source" in options and options["source"] is not None
-            kwargs["source"] = options["source"]
+            assert source is not None, breakpoint()
             example_value = wrap_to_fake_tensor_and_record(
-                example_value, tx=tx, **kwargs
+                example_value, tx=tx, source=source, **kwargs
             )
 
     if isinstance(example_value, torch.Tensor):
@@ -963,6 +969,7 @@ def wrap_to_fake_tensor_and_record(
             or type(e) is torch.nn.Parameter
             or config.dynamic_shapes is False
             or not is_tensor
+            or (source and source.guard_source().is_nn_module())
         )
         fake_e = wrap_fake_exception(
             lambda: tx.fake_mode.from_tensor(
