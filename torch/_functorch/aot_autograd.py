@@ -30,6 +30,8 @@ from .named_members_polyfill import _named_buffers, _named_parameters
 from .partitioners import default_partition
 from torch._guards import TracingContext, DuplicateInputs
 
+guard__ = torch.autograd._force_original_view_tracking(True)
+
 log = logging.getLogger(__name__)
 
 MutationType = Enum(
@@ -1630,7 +1632,7 @@ def aot_dispatch_autograd(flat_fn, flat_args: List[Any], aot_config: AOTConfig):
     disable_amp = torch._C._is_any_autocast_enabled()
 
     if config.use_functionalize:
-        with enable_python_dispatcher():
+        with enable_python_dispatcher(), torch.autograd._force_original_view_tracking(True):
             flattened_joints, _ = pytree.tree_flatten(joint_inputs)
             fx_g = make_fx(joint_forward_backward, aot_config.decompositions)(
                 *joint_inputs
@@ -1921,7 +1923,8 @@ def aot_dispatch_autograd(flat_fn, flat_args: List[Any], aot_config: AOTConfig):
         else:
             args_with_synthetic_bases = args
 
-        all_outs = CompiledFunction.apply(*args_with_synthetic_bases)
+        with torch.autograd._force_original_view_tracking(True):
+            all_outs = CompiledFunction.apply(*args_with_synthetic_bases)
 
         num_mutated_inps = CompiledFunction.num_mutated_inputs
         num_intermediate_bases = CompiledFunction.fw_metadata.num_intermediate_bases
@@ -2021,9 +2024,7 @@ def aot_dispatch_autograd(flat_fn, flat_args: List[Any], aot_config: AOTConfig):
                 # TODO: handle the custom autograd function case here.
                 # We need a way to check whether a tensor came from a custom autograd fn from python,
                 # AND a way to replay that custom view fn.
-                regenerated_out = gen_alias_from_base(
-                    aliased_base_tensor, o_, o_grad
-                )
+                regenerated_out = gen_alias_from_base(aliased_base_tensor, o_, o_grad)
                 fw_outs_including_aliases.append(regenerated_out)
             return fw_outs_including_aliases
         else:
