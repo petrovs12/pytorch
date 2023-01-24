@@ -64,12 +64,17 @@ from torch.distributed.fsdp._wrap_utils import _auto_wrap
 from torch.distributed.fsdp.api import (
     BackwardPrefetch,
     CPUOffload,
+    FullOptimStateDictConfig,
     FullStateDictConfig,
+    LocalOptimStateDictConfig,
     LocalStateDictConfig,
     MixedPrecision,
+    OptimStateDictConfig,
+    ShardedOptimStateDictConfig,
     ShardedStateDictConfig,
     ShardingStrategy,
     StateDictConfig,
+    StateDictSettings,
     StateDictType,
 )
 
@@ -534,7 +539,8 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         module: nn.Module,
         state_dict_type: StateDictType,
         state_dict_config: Optional[StateDictConfig] = None,
-    ) -> Tuple[StateDictType, StateDictConfig]:
+        optim_state_dict_config: Optional[OptimStateDictConfig] = None,
+    ) -> StateDictSettings:
         """
         Set the ``state_dict_type`` and the corresponding (optional)
         configurations of all the descendant FSDP modules of the target module.
@@ -558,53 +564,104 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             >>> FSDP.set_state_dict_type(
             >>>     model,
             >>>     StateDictType.SHARDED_STATE_DICT,
-            >>>     ShardedStateDictConfig(offload_to_cpu=True),
+            >>>     state_dict_config = ShardedStateDictConfig(offload_to_cpu=True),
+            >>>     optim_state_dict_config = OptimStateDictConfig(offload_to_cpu=True),
             >>> )
-            >>> checkpoint = model.state_dict()
+            >>> param_state_dict = model.state_dict()
+            >>> optim_state_dict = FSDP.optim_state_dict(model, optim)
 
         Args:
             module (torch.nn.Module): Root module.
             state_dict_type (StateDictType): the desired ``state_dict_type`` to set.
             state_dict_config (Optional[StateDictConfig]): the configuration for the
                 target ``state_dict_type``.
+        Returns:
+            A StateDictSettings that include the previous state_dict type and
+            configuration for the module.
         """
         _state_dict_type_to_config = {
             StateDictType.FULL_STATE_DICT: FullStateDictConfig,
             StateDictType.LOCAL_STATE_DICT: LocalStateDictConfig,
             StateDictType.SHARDED_STATE_DICT: ShardedStateDictConfig,
         }
+        _optim_state_dict_type_to_config = {
+            StateDictType.FULL_STATE_DICT: FullOptimStateDictConfig,
+            StateDictType.LOCAL_STATE_DICT: LocalOptimStateDictConfig,
+            StateDictType.SHARDED_STATE_DICT: ShardedOptimStateDictConfig,
+        }
 
+        # Use the default config if a state_dict config is not set.
+        state_dict_config_type = _state_dict_type_to_config[state_dict_type]
+        optim_state_dict_config_type = _optim_state_dict_type_to_config[state_dict_type]
+        if state_dict_config is None:
+            state_dict_config = state_dict_config_type()
+        if optim_state_dict_config is None:
+            optim_state_dict_config = optim_state_dict_config_type()
+        if state_dict_config_type != type(state_dict_config):
+            raise RuntimeError(
+                f"Expected state_dict_config of type {state_dict_config_type} "
+                f"but got {type(state_dict_config)}"
+            )
+        if optim_state_dict_config_type != type(optim_state_dict_config):
+            raise RuntimeError(
+                f"Expected optim_state_dict_config of type {optim_state_dict_config_type} "
+                f"but got {type(optim_state_dict_config)}"
+            )
+
+        # Set the state_dict type and configurations.
         prev_state_dict_type = None
         prev_state_dict_config = None
-        # Use the default config if a state_dict config is not set.
-        if state_dict_config is None:
-            state_dict_config = _state_dict_type_to_config[state_dict_type]()
+        prev_optim_state_dict_config = None
         for submodule in traversal_utils._get_fsdp_states(module):
             if prev_state_dict_type is None:
                 prev_state_dict_type = submodule._state_dict_type
+            else:
+                assert (
+                    prev_state_dict_type == submodule._state_dict_type
+                ), "All FSDP modules should have the same state_dict_type."
             if prev_state_dict_config is None:
                 prev_state_dict_config = submodule._state_dict_config
-            if prev_state_dict_type != submodule._state_dict_type:
-                raise RuntimeError("All FSDP module should the same state_dict_type.")
-            if not isinstance(
-                submodule._state_dict_config, type(prev_state_dict_config)
-            ):
-                raise RuntimeError(
-                    "All FSDP modules should have the same type of state_dict_config."
-                )
+            else:
+                assert isinstance(
+                    submodule._state_dict_config, type(prev_state_dict_config)
+                ), "All FSDP modules must have the same type of state_dict_config."
+            if prev_optim_state_dict_config is None:
+                prev_optim_state_dict_config = submodule._optim_state_dict_config
+            else:
+                assert isinstance(
+                    submodule._optim_state_dict_config,
+                    type(prev_optim_state_dict_config),
+                ), "All FSDP modules must have the same type of optim_state_dict_config."
 
-            expected_state_dict_config_type = _state_dict_type_to_config[
-                state_dict_type
-            ]
-            if expected_state_dict_config_type != type(state_dict_config):
-                raise RuntimeError(
-                    f"Expected state_dict_config of type {expected_state_dict_config_type} "
-                    f"but got {type(state_dict_config)}"
-                )
             submodule._state_dict_type = state_dict_type
             submodule._state_dict_config = state_dict_config
+            submodule._optimstate_dict_config = optim_state_dict_config
 
-        return prev_state_dict_type, prev_state_dict_config
+        return StateDictSettings(
+            prev_state_dict_type, prev_state_dict_config, prev_optim_state_dict_config
+        )
+
+    @staticmethod
+    def get_state_dict_type(module: nn.Module) -> StateDictSettings:
+        state_dict_settings: Optional[StateDictSettings] = None
+        for submodule in FullyShardedDataParallel.fsdp_modules(module):
+            if state_dict_settings is None:
+                state_dict_settings = StateDictSettings(
+                    state_dict_type=submodule._state_dict_type,
+                    state_dict_config=submodule._state_dict_config,
+                    optim_state_dict_config=submodule._optim_state_dict_config,
+                )
+            else:
+                submodule_settings = StateDictSettings(
+                    submodule._state_dict_type,
+                    submodule._state_dict_config,
+                    submodule._optim_state_dict_config,
+                )
+                assert state_dict_settings == submodule_settings, (
+                    "All FSDP modules must have the same state dict settings."
+                    f"Got {submodule_settings} and {state_dict_settings}."
+                )
+        return state_dict_settings
 
     @staticmethod
     @contextlib.contextmanager
@@ -612,6 +669,7 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         module: nn.Module,
         state_dict_type: StateDictType,
         state_dict_config: Optional[StateDictConfig] = None,
+        optim_state_dict_config: Optional[OptimStateDictConfig] = None,
     ) -> Generator:
         """
         A context manager to set the ``state_dict_type`` of all the descendant
@@ -635,26 +693,22 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             state_dict_config (Optional[StateDictConfig]): the configuration for the
                 target ``state_dict_type``.
         """
-        prev_state_dict_type = None
-        prev_state_dict_config = None
         try:
-            (
-                prev_state_dict_type,
-                prev_state_dict_config,
-            ) = FullyShardedDataParallel.set_state_dict_type(
-                module, state_dict_type, state_dict_config
+            prev_state_dict_settings = FullyShardedDataParallel.set_state_dict_type(
+                module,
+                state_dict_type,
+                state_dict_config,
+                optim_state_dict_config,
             )
             yield
         except Exception as e:
             raise e
-        else:
-            assert prev_state_dict_type is not None
-            assert prev_state_dict_config is not None
-        finally:
-            if prev_state_dict_type is not None and prev_state_dict_config is not None:
-                FullyShardedDataParallel.set_state_dict_type(
-                    module, prev_state_dict_type, prev_state_dict_config
-                )
+        FullyShardedDataParallel.set_state_dict_type(
+            module,
+            prev_state_dict_settings.state_dict_type,
+            prev_state_dict_settings.state_dict_config,
+            prev_state_dict_settings.optim_state_dict_config,
+        )
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         """
@@ -1114,7 +1168,7 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
     def _raise_on_use_orig_params_optim_checkpoint(
         model: nn.Module, full_optim: bool, rank0_only: bool
     ):
-        if full_optim and not rank0_only:
+        if not full_optim or not rank0_only:
             return
         if any(
             fsdp_module._use_orig_params
@@ -1145,9 +1199,6 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         FSDP internal information and internal sharding from the optim_state_dict.
         """
         if full_state_dict:
-            FullyShardedDataParallel._raise_on_use_orig_params_optim_checkpoint(
-                model, True, rank0_only
-            )
             FullyShardedDataParallel._warn_optim_input(optim_input)
             using_optim_input = FullyShardedDataParallel._is_using_optim_input(
                 optim_input,
@@ -1156,9 +1207,6 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         else:
             using_optim_input = False
             assert optim_input is None and not rank0_only
-            FullyShardedDataParallel._raise_on_use_orig_params_optim_checkpoint(
-                model, False, False
-            )
 
         use_orig_params = FullyShardedDataParallel.fsdp_modules(model)[
             0
@@ -1192,7 +1240,9 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         ] = None,
         optim: Optional[torch.optim.Optimizer] = None,
         full_state_dict: bool = True,
+        rank0_only: bool = False,
         is_named_optimizer: bool = False,
+        group: Optional[dist.ProcessGroup] = None,
     ) -> Dict[str, Any]:
         """
         The internal API that is used by all the load optim_state_dict
@@ -1201,9 +1251,6 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         Given model, optim, the saved optim_state_dict, this API adds the
         FSDP internal information and internal sharding to the optim_state_dict.
         """
-        FullyShardedDataParallel._raise_on_use_orig_params_optim_checkpoint(
-            model, full_state_dict, False
-        )
         FullyShardedDataParallel._warn_optim_input(optim_input)
         using_optim_input = FullyShardedDataParallel._is_using_optim_input(
             optim_input,
@@ -1218,20 +1265,67 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             for m in FullyShardedDataParallel.fsdp_modules(model)
         ), "Not all FSDP modules have the same _use_orig_params value"
 
-        sharded_osd = _flatten_optim_state_dict(
-            optim_state_dict,
-            model,
-            True,
-            use_orig_params,
-        )
-        return _rekey_sharded_optim_state_dict(
-            sharded_osd,
-            model,
-            optim,
-            optim_input,
-            using_optim_input,
-            is_named_optimizer,
-        )
+        if rank0_only:
+            rank = dist.get_rank(group)
+            world_size = dist.get_world_size(group)
+            # Flatten the optimizer state dict and construct a copy with the
+            # positive-dimension tensors' shapes in place of the tensors themselves
+            # since those tensors will be broadcast separately to avoid copying
+            if rank == 0:
+                flat_osd = _flatten_optim_state_dict(
+                    optim_state_dict,
+                    model=model,
+                    shard_state=False,
+                    use_orig_params=use_orig_params,
+                )
+                processed_osd = _process_pos_dim_tensor_state(flat_osd, world_size)
+                # Broadcast the optim state dict without positive-dimension tensor
+                # state and the FSDP parameter IDs from rank 0 to all ranks
+            processed_osd = _broadcast_processed_optim_state_dict(
+                processed_osd if rank == 0 else None,
+                rank,
+                group,
+            )
+            # Broadcast positive-dimension tensor state (both sharded tensors for
+            # FSDP parameters and unsharded tensors for non-FSDP parameters)
+            broadcast_device = (
+                torch.device("cuda")
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
+            sharded_osd = _broadcast_pos_dim_tensor_states(
+                processed_osd,
+                flat_osd if rank == 0 else None,
+                rank,
+                world_size,
+                group,
+                broadcast_device,
+            )
+            # Rekey the optimizer state dict to use parameter IDs according to this
+            # rank's `optim`
+            ret_state_dict = _rekey_sharded_optim_state_dict(
+                sharded_osd,
+                model,
+                optim,
+                optim_input,
+                using_optim_input,
+            )
+        else:
+            sharded_osd = _flatten_optim_state_dict(
+                optim_state_dict,
+                model,
+                True,
+                use_orig_params,
+            )
+            ret_state_dict = _rekey_sharded_optim_state_dict(
+                sharded_osd,
+                model,
+                optim,
+                optim_input,
+                using_optim_input,
+                is_named_optimizer,
+            )
+        return ret_state_dict
 
     @staticmethod
     def full_optim_state_dict(
@@ -1505,6 +1599,17 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             flattened parameters instead of unflattened parameters and
             restricted to only include this rank's part of the optimizer state.
         """
+        return FullyShardedDataParallel._optim_state_dict_to_load_impl(
+            optim_state_dict=full_optim_state_dict,
+            model=model,
+            optim_input=optim_input,
+            optim=optim,
+            full_state_dict=True,
+            rank0_only=True,
+            is_named_optimizer=False,
+            group=group,
+        )
+        """
         FullyShardedDataParallel._raise_on_use_orig_params_optim_checkpoint(
             model, True, True
         )
@@ -1565,6 +1670,7 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             using_optim_input,
         )
         return sharded_osd
+        """
 
     @staticmethod
     def rekey_optim_state_dict(
@@ -1693,23 +1799,25 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         return new_osd  # should never reach here
 
     @staticmethod
-    def _optim_state_dict_post_hook(
+    def optim_state_dict_post_hook(
         model: torch.nn.Module,
         optim: torch.optim.Optimizer,
         optim_state_dict: Dict[str, Any],
     ) -> Dict[str, Any]:
+        state_dict_settings = FullyShardedDataParallel.get_state_dict_type(model)
         return FullyShardedDataParallel._optim_state_dict_impl(
             model=model,
             optim=optim,
             optim_state_dict=optim_state_dict,
             optim_input=None,
-            rank0_only=False,
+            rank0_only=getattr(state_dict_settings, "rank0_only", False),
             group=None,
-            full_state_dict=True,
+            full_state_dict=state_dict_settings.state_dict_type
+            == StateDictType.FULL_STATE_DICT,
         )
 
     @staticmethod
-    def _optim_state_dict(
+    def optim_state_dict(
         model: torch.nn.Module,
         optim: torch.optim.Optimizer,
         group: Optional[dist.ProcessGroup] = None,
@@ -1738,40 +1846,46 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             ``model``. The sharding of the optimizer state is based on
             ``state_dict_type``.
         """
-        return FullyShardedDataParallel.full_optim_state_dict(
-            model, optim, rank0_only=False, group=group
+        state_dict_settings = FullyShardedDataParallel.get_state_dict_type(model)
+        return FullyShardedDataParallel._optim_state_dict_impl(
+            model=model,
+            optim=optim,
+            optim_state_dict=optim.state_dict(),
+            optim_input=None,
+            rank0_only=getattr(state_dict_settings, "rank0_only", False),
+            group=group,
+            full_state_dict=state_dict_settings.state_dict_type
+            == StateDictType.FULL_STATE_DICT,
         )
 
     @staticmethod
-    def _load_optim_state_dict_pre_hook(
+    def load_optim_state_dict_pre_hook(
         model: torch.nn.Module,
         optim: torch.optim.Optimizer,
         optim_state_dict: Dict[str, Any],
     ) -> Dict[str, Any]:
+        state_dict_settings = FullyShardedDataParallel.get_state_dict_type(model)
         return FullyShardedDataParallel._optim_state_dict_to_load_impl(
             optim_state_dict=optim_state_dict,
             model=model,
             optim_input=None,
             optim=optim,
-            full_state_dict=True,
+            full_state_dict=state_dict_settings.state_dict_type
+            == StateDictType.FULL_STATE_DICT,
             is_named_optimizer=True,
         )
 
     @staticmethod
-    def _optim_state_dict_to_load(
+    def optim_state_dict_to_load(
         optim_state_dict: Dict[str, Any],
         model: torch.nn.Module,
         optim: torch.optim.Optimizer,
+        is_named_optimizer: bool = False,
         group: Optional[dist.ProcessGroup] = None,
     ) -> Dict[str, Any]:
         """
-        This API is still being developed, hence the `_` prefix. The comment
-        below is also not fully implemented yet. Do not use this API unless
-        you know why this API exists and how this API works.
-
-        Load the optimizer state, ``state_dict``, to the optimizer ``optim``.
-        ``state_dict_type`` set by :meth:``set_state_dict_type`` decides how
-        to load the state_dict.
+        Give a saved ``optim_state_dict``, convert it to the optimizer state_dict
+        that can be loaded for FSDP modules.
 
         Args:
             optim_state_dict (Dict[str, Any]): The optimizer states to be loaded.
@@ -1780,17 +1894,25 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
                 were passed into the optimizer ``optim``.
             optim (torch.optim.Optimizer): Optimizer for ``model`` 's
                 parameters.
+            is_named_optimizer (bool): Is this optimizer a NamedOptimizer or
+                KeyedOptimizer. Only set to True if ``optim`` is TorchRec's
+                KeyedOptimizer or torch.distributed's NamedOptimizer.
             group (dist.ProcessGroup): Model's process group across which parameters
                 are sharded or ``None`` if using the default process group. (
                 Default: ``None``)
         """
+        state_dict_settings = FullyShardedDataParallel.get_state_dict_type(model)
         return FullyShardedDataParallel._optim_state_dict_to_load_impl(
             optim_state_dict=optim_state_dict,
             model=model,
             optim_input=None,
             optim=optim,
-            full_state_dict=True,
-            is_named_optimizer=False,
+            full_state_dict=(
+                state_dict_settings.state_dict_type == StateDictType.FULL_STATE_DICT
+            ),
+            rank0_only=getattr(state_dict_settings, "rank0_only", False),
+            is_named_optimizer=is_named_optimizer,
+            group=group,
         )
 
     def register_comm_hook(self, state: object, hook: callable):
