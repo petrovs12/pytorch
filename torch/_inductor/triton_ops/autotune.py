@@ -6,6 +6,7 @@ import json
 import logging
 import os.path
 import re
+import tempfile
 import threading
 from typing import List
 
@@ -53,11 +54,14 @@ class CachingAutotuner(KernelInterface):
         self.configs = configs
         self.launchers = []
         self.lock = threading.Lock()
-        triton_cache_dir = os.path.join(
-            "/tmp", getpass.getuser(), str(self.meta.get("device", 0)), "triton/cache"
-        )
-        os.environ["TRITON_CACHE_DIR"] = triton_cache_dir
-        log.info(f"Triton cache directory: {triton_cache_dir}")
+        if os.getenv("TRITON_CACHE_DIR") is None:
+            os.environ["TRITON_CACHE_DIR"] = os.path.join(
+                tempfile.gettempdir(),
+                getpass.getuser(),
+                str(self.meta.get("device", 0)),
+                "triton/cache",
+            )
+        log.info(f"Triton cache directory: {os.environ['TRITON_CACHE_DIR']}")
 
     def precompile(self, warm_cache_only_with_cc=None):
         with self.lock:
